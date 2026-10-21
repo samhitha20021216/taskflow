@@ -1,0 +1,49 @@
+spring:
+  application:
+    name: taskflow
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/taskflow}
+    username: ${DB_USER:taskflow}
+    password: ${DB_PASSWORD:taskflow}
+    hikari:
+      maximum-pool-size: 20
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP:localhost:9092}
+    producer:
+      acks: all
+      properties:
+        enable.idempotence: true
+    consumer:
+      auto-offset-reset: earliest
+      properties:
+        # Long jobs never block poll(): the listener only claims and hands off.
+        max.poll.interval.ms: 300000
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+  threads:
+    virtual:
+      enabled: false
+  task:
+    scheduling:
+      pool:
+        size: 4
+
+taskflow:
+  node-id: ${TASKFLOW_NODE_ID:}
+  coordination: ${TASKFLOW_COORDINATION:postgres}
+  scheduler:
+    enabled: ${TASKFLOW_SCHEDULER_ENABLED:true}
+  worker:
+    enabled: ${TASKFLOW_WORKER_ENABLED:true}
+    concurrency: ${TASKFLOW_WORKER_CONCURRENCY:4}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  health:
+    redis:
+      enabled: ${TASKFLOW_REDIS_HEALTH:false}
