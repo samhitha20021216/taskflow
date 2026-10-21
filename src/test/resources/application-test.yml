@@ -1,0 +1,27 @@
+taskflow:
+  coordination: postgres
+  scheduler:
+    queued-timeout: 3s
+    leader-ttl: 2s
+    election-interval-ms: 200
+    dispatch-interval-ms: 100
+    sweep-interval-ms: 300
+  worker:
+    concurrency: 4
+    lease-duration: 1500ms
+    heartbeat-interval-ms: 300
+    shutdown-grace-period: 2s
+  retry:
+    base-delay: 50ms
+    max-delay: 500ms
+spring:
+  kafka:
+    consumer:
+      properties:
+        metadata.max.age.ms: 1000
+logging:
+  level:
+    org.apache.kafka: WARN
+    kafka: WARN
+    org.apache.zookeeper: WARN
+    state.change.logger: WARN
