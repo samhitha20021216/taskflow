@@ -167,6 +167,16 @@ public class JobRepository {
                 .list();
     }
 
+    /** Undo a dispatch whose Kafka publish failed. */
+    public int revertQueued(List<UUID> ids) {
+        return jdbc.sql("""
+                        UPDATE jobs SET status = 'SCHEDULED', queued_at = NULL, updated_at = now()
+                        WHERE id IN (:ids) AND status = 'QUEUED'
+                        """)
+                .param("ids", ids)
+                .update();
+    }
+
     // ---------------------------------------------------------------- worker side (fenced)
 
     /** Atomically takes ownership of a QUEUED job. Empty if another worker got it first. */

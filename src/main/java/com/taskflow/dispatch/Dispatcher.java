@@ -1,6 +1,7 @@
 package com.taskflow.dispatch;
 
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
@@ -22,10 +23,12 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 
 /**
- * Moves due jobs from SCHEDULED to QUEUED and publishes their ids to Kafka, inside one DB transaction.
+ * Moves due jobs from SCHEDULED to QUEUED, commits, and only then publishes their ids to Kafka.
  *
- * <p>If publishing fails the transaction rolls back and the jobs stay SCHEDULED. If a message is lost after
- * commit, the sweeper re-dispatches the stuck job.
+ * <p>Publishing must happen after the commit: a fast worker can receive the message before the
+ * transaction commits, still see the job as SCHEDULED, and drop the message. With commit-then-publish:
+ * if publishing fails, the batch is put back to SCHEDULED immediately; if the process dies between
+ * commit and publish, the sweeper re-dispatches jobs that stay QUEUED longer than the queued timeout.
  */
 @Component
 public class Dispatcher {
@@ -63,27 +66,33 @@ public class Dispatcher {
                 count = dispatchBatch(batchSize);
             } while (count == batchSize);
         } catch (Exception e) {
-            log.warn("Dispatch batch rolled back: {}", e.getMessage());
+            log.warn("Dispatch failed: {}", e.getMessage());
         }
     }
 
     private int dispatchBatch(int batchSize) {
-        Integer count = tx.execute(status -> {
-            List<DispatchedJob> jobs = repository.markDueJobsQueued(batchSize);
-            if (jobs.isEmpty()) {
-                return 0;
+        List<DispatchedJob> jobs = tx.execute(status -> {
+            List<DispatchedJob> due = repository.markDueJobsQueued(batchSize);
+            for (DispatchedJob j : due) {
+                repository.addEvent(j.id(), JobEvent.DISPATCHED, j.attempt(), node.id(), null);
             }
+            return due;
+        });
+        if (jobs == null || jobs.isEmpty()) {
+            return 0;
+        }
+        try {
             CompletableFuture<?>[] sends = jobs.stream()
                     .map(j -> kafka.send(props.topic(), j.id().toString(), j.id().toString()))
                     .toArray(CompletableFuture[]::new);
             CompletableFuture.allOf(sends).orTimeout(10, TimeUnit.SECONDS).join();
-            for (DispatchedJob j : jobs) {
-                repository.addEvent(j.id(), JobEvent.DISPATCHED, j.attempt(), node.id(), null);
-            }
-            return jobs.size();
-        });
-        int n = count == null ? 0 : count;
-        dispatched.increment(n);
-        return n;
+        } catch (RuntimeException e) {
+            List<UUID> ids = jobs.stream().map(DispatchedJob::id).toList();
+            int reverted = repository.revertQueued(ids);
+            log.warn("Publishing {} jobs failed ({}); reverted {} to SCHEDULED", ids.size(), e.getMessage(), reverted);
+            return 0;
+        }
+        dispatched.increment(jobs.size());
+        return jobs.size();
     }
 }
